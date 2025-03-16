@@ -7,22 +7,50 @@ import argparse
 import logging
 import signal
 import anthropic
+import base64
+import subprocess
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import configparser
 import re
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.expanduser("~/Library/Logs/snapsense.log")),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger("SnapSense")
+# Setup logging with more robust error handling
+def setup_logging():
+    log_file = os.path.expanduser("~/Library/Logs/snapsense.log")
+    
+    # Create a custom logger
+    logger = logging.getLogger("SnapSense")
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers to avoid duplicates
+    if logger.handlers:
+        logger.handlers.clear()
+    
+    try:
+        # File handler with explicit encoding and error handling
+        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8', delay=True)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        logger.addHandler(file_handler)
+        
+        # Only add stream handler when not running as daemon
+        if os.isatty(sys.stdout.fileno()):
+            stream_handler = logging.StreamHandler(sys.stdout)
+            stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+            logger.addHandler(stream_handler)
+    except Exception as e:
+        # Fallback to basic configuration if there's an issue
+        print(f"Error setting up logging: {e}")
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        logger = logging.getLogger("SnapSense")
+    
+    return logger
+
+# Initialize logger
+logger = setup_logging()
 
 # Default configuration
 DEFAULT_CONFIG = {
@@ -134,7 +162,7 @@ class ScreenshotHandler(FileSystemEventHandler):
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/png",
-                                    "data": anthropic.utils.encode_base64(image_data)
+                                    "data": base64.standard_b64encode(image_data).decode("utf-8")
                                 }
                             },
                             {
@@ -217,30 +245,85 @@ def start_monitoring(config):
     observer.join()
 
 def write_pid_file(pid):
-    """Write the process ID to a file."""
+    """Write the process ID to a file with proper locking."""
     pid_dir = os.path.expanduser("~/.config/snapsense")
     if not os.path.exists(pid_dir):
-        os.makedirs(pid_dir)
+        os.makedirs(pid_dir, exist_ok=True)
     
     pid_file = os.path.join(pid_dir, "snapsense.pid")
-    with open(pid_file, 'w') as f:
-        f.write(str(pid))
+    lock_file = f"{pid_file}.lock"
+    
+    # Create a lock file to prevent race conditions
+    try:
+        # Try to create the lock file exclusively
+        lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            # Write PID to the actual PID file
+            with open(pid_file, 'w') as f:
+                f.write(str(pid))
+        finally:
+            # Close and remove the lock file
+            os.close(lock_fd)
+            try:
+                os.unlink(lock_file)
+            except OSError:
+                pass
+    except OSError:
+        # If we couldn't create the lock file, another process might be writing
+        # Wait a bit and continue
+        time.sleep(0.1)
     
     return pid_file
 
 def read_pid_file():
-    """Read the process ID from the file."""
+    """Read the process ID from the file with proper error handling."""
     pid_file = os.path.expanduser("~/.config/snapsense/snapsense.pid")
     if os.path.exists(pid_file):
-        with open(pid_file, 'r') as f:
-            return int(f.read().strip())
+        try:
+            with open(pid_file, 'r') as f:
+                pid_str = f.read().strip()
+                if pid_str.isdigit():
+                    return int(pid_str)
+                else:
+                    logger.error(f"Invalid PID in file: {pid_str}")
+                    # Clean up the invalid PID file
+                    try:
+                        os.remove(pid_file)
+                    except OSError:
+                        pass
+        except (IOError, ValueError) as e:
+            logger.error(f"Error reading PID file: {e}")
+            # Clean up the potentially corrupted PID file
+            try:
+                os.remove(pid_file)
+            except OSError:
+                pass
     return None
 
 def is_process_running(pid):
-    """Check if a process with the given PID is running."""
+    """Check if a process with the given PID is running and is a SnapSense process."""
     try:
+        # First check if process exists
         os.kill(pid, 0)
-        return True
+        
+        # On macOS, we can check the process name to verify it's SnapSense
+        try:
+            # Use ps command to get process name
+            result = subprocess.run(['ps', '-p', str(pid), '-o', 'comm='], 
+                                   capture_output=True, text=True, check=False)
+            process_name = result.stdout.strip()
+            
+            # Check if it's a python process
+            if 'python' in process_name.lower():
+                # Further verify by checking if it's running our script
+                result = subprocess.run(['ps', '-p', str(pid), '-o', 'command='], 
+                                       capture_output=True, text=True, check=False)
+                command = result.stdout.strip()
+                return 'snapsense.py' in command or 'snapsense_cli.py' in command
+            return False
+        except (subprocess.SubprocessError, FileNotFoundError):
+            # If we can't check the process name, just assume it's running
+            return True
     except OSError:
         return False
 
@@ -256,7 +339,8 @@ def main():
         pid = read_pid_file()
         if pid and is_process_running(pid):
             print(f"SnapSense is already running (PID: {pid})")
-            return
+            # Exit with success since the service is already running
+            sys.exit(0)
         
         # Load configuration
         config = ensure_config_exists()
@@ -292,8 +376,9 @@ def main():
         with open(os.devnull, 'r') as f:
             os.dup2(f.fileno(), sys.stdin.fileno())
         
-        log_file = os.path.expanduser("~/Library/Logs/snapsense.log")
-        with open(log_file, 'a+') as f:
+        # Redirect stdout/stderr to /dev/null instead of the log file
+        # to avoid duplicate logging (the logger already writes to the log file)
+        with open(os.devnull, 'a+') as f:
             os.dup2(f.fileno(), sys.stdout.fileno())
             os.dup2(f.fileno(), sys.stderr.fileno())
         
