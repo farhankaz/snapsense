@@ -2,13 +2,20 @@
 
 SnapSense is an intelligent screenshot renaming tool for Apple Silicon Macs that uses Anthropic's Claude AI to analyze images and generate descriptive filenames.
 
+## The Problem SnapSense Solves
+
+Over time, Mac users accumulate hundreds of screenshots with generic filenames like "Screenshot 2025-03-16 at 13.21.35.png" using the built-in Screenshot utility. These cryptic names make it nearly impossible to find specific screenshots using Spotlight search or Finder.
+
+SnapSense transforms this experience by intelligently analyzing your screenshots and renaming them with meaningful, descriptive filenames that accurately reflect their content. This makes your screenshots instantly searchable and discoverable, saving you valuable time and reducing digital clutter. Whether you're a designer collecting inspiration, a developer documenting bugs, or a professional organizing meeting notes, SnapSense ensures your visual information is always at your fingertips.
+
 ## Features
 
-- Automatically monitors a configurable directory for new screenshots
+- Real-time monitoring of a configurable directory using file system events
+- Processes existing screenshots at startup
 - Uses Claude's vision capabilities to analyze image content
 - Generates descriptive, meaningful filenames based on image content
+- Efficient queue-based processing system
 - Runs as a background process on macOS
-- Configurable scan interval and screenshot prefix
 - Simple command-line interface for management
 
 ## Requirements
@@ -60,14 +67,12 @@ Default configuration:
 
 ```ini
 [General]
-scan_interval = 5
 scan_directory = ~/Desktop
 screenshot_prefix = Screenshot
 max_retries = 3
 retry_delay = 2
 ```
 
-- `scan_interval`: How often to scan the directory (in seconds)
 - `scan_directory`: The directory to monitor for screenshots
 - `screenshot_prefix`: Only process files starting with this prefix
 - `max_retries`: Maximum number of retries for API calls
@@ -79,10 +84,13 @@ Logs are stored at `~/Library/Logs/snapsense.log`.
 
 ## How It Works
 
-1. SnapSense monitors your configured directory for new image files
-2. When a new image with the configured prefix is detected, it's sent to Claude's vision model
-3. Claude analyzes the image content and suggests an appropriate filename
-4. The file is renamed with the suggested name, maintaining the original file extension
+1. At startup, SnapSense scans your configured directory for existing screenshots and adds them to a processing queue
+2. SnapSense uses file system events to detect new screenshots in real-time
+3. When a new screenshot is detected, it's added to the processing queue
+4. A dedicated worker thread processes images from the queue one by one
+5. Each image is sent to Claude's vision model for analysis
+6. Claude analyzes the image content and suggests an appropriate filename
+7. The file is renamed with the suggested name, maintaining the original file extension
 
 ## Troubleshooting
 

@@ -159,7 +159,6 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo "Creating default configuration..."
     cat > "$CONFIG_FILE" << EOF
 [General]
-scan_interval = 5
 scan_directory = $HOME/Desktop
 screenshot_prefix = Screenshot
 max_retries = 3

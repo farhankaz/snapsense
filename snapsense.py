@@ -9,6 +9,8 @@ import signal
 import anthropic
 import base64
 import subprocess
+import queue
+import threading
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -55,7 +57,6 @@ logger = setup_logging()
 # Default configuration
 DEFAULT_CONFIG = {
     "General": {
-        "scan_interval": "5",  # seconds
         "scan_directory": os.path.expanduser("~/Desktop"),
         "screenshot_prefix": "Screenshot",
         "max_retries": "3",
@@ -86,6 +87,9 @@ def load_config():
     config.read(CONFIG_PATH)
     return config
 
+# Create a global processing queue and worker thread
+processing_queue = queue.Queue()
+
 class ScreenshotHandler(FileSystemEventHandler):
     def __init__(self, config):
         self.config = config
@@ -108,7 +112,17 @@ class ScreenshotHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         
-        self.process_file(event.src_path)
+        # Add file to processing queue instead of processing immediately
+        path = Path(event.src_path)
+        
+        # Check if it's an image file
+        if path.suffix.lower() in self.image_extensions:
+            # Check if it starts with the screenshot prefix
+            if path.stem.startswith(self.screenshot_prefix):
+                logger.info(f"Adding new screenshot to queue: {event.src_path}")
+                # Give the file system a moment to finish writing the file
+                time.sleep(0.5)
+                processing_queue.put(event.src_path)
     
     def process_file(self, file_path):
         """Process a newly created file if it matches our criteria."""
@@ -209,37 +223,70 @@ class ScreenshotHandler(FileSystemEventHandler):
             logger.error(f"Error renaming file: {str(e)}")
 
 def scan_directory(config):
-    """Scan the directory for existing screenshots."""
+    """Scan the directory for existing screenshots and add them to the processing queue."""
     directory = config["General"]["scan_directory"]
     handler = ScreenshotHandler(config)
     
-    logger.info(f"Scanning directory: {directory}")
+    logger.info(f"Scanning directory for existing screenshots: {directory}")
     
     try:
         for filename in os.listdir(directory):
             file_path = os.path.join(directory, filename)
             if os.path.isfile(file_path):
-                handler.process_file(file_path)
+                path = Path(file_path)
+                
+                # Check if it's an image file
+                if path.suffix.lower() in handler.image_extensions:
+                    # Check if it starts with the screenshot prefix
+                    if path.stem.startswith(handler.screenshot_prefix):
+                        logger.info(f"Adding existing screenshot to queue: {file_path}")
+                        processing_queue.put(file_path)
     except Exception as e:
         logger.error(f"Error scanning directory: {str(e)}")
+
+def process_queue_worker(config):
+    """Worker thread to process files from the queue."""
+    handler = ScreenshotHandler(config)
+    
+    logger.info("Starting queue processing worker")
+    
+    while True:
+        try:
+            # Get a file path from the queue (blocks until an item is available)
+            file_path = processing_queue.get()
+            
+            # Process the file
+            handler.process_file(file_path)
+            
+            # Mark the task as done
+            processing_queue.task_done()
+        except Exception as e:
+            logger.error(f"Error in queue worker: {str(e)}")
+            # Don't exit the worker thread on error, continue processing
 
 def start_monitoring(config):
     """Start monitoring the directory for new screenshots."""
     directory = config["General"]["scan_directory"]
-    scan_interval = int(config["General"]["scan_interval"])
     
-    logger.info(f"Starting monitoring of {directory} (interval: {scan_interval}s)")
+    logger.info(f"Starting monitoring of {directory}")
     
+    # First scan for existing files
+    scan_directory(config)
+    
+    # Start the queue worker thread
+    worker_thread = threading.Thread(target=process_queue_worker, args=(config,), daemon=True)
+    worker_thread.start()
+    
+    # Start the file system observer
     event_handler = ScreenshotHandler(config)
     observer = Observer()
     observer.schedule(event_handler, directory, recursive=False)
     observer.start()
     
     try:
+        # Keep the main thread alive
         while True:
-            # Periodically scan the directory for any missed files
-            scan_directory(config)
-            time.sleep(scan_interval)
+            time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
     observer.join()
