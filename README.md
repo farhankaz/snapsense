@@ -1,6 +1,6 @@
 # SnapSense
 
-SnapSense is an intelligent screenshot renaming tool for Apple Silicon Macs that uses Anthropic's Claude AI to analyze images and generate descriptive filenames.
+SnapSense is an intelligent screenshot renaming AI agent for Apple Silicon Macs that uses Anthropic's Claude AI to analyze images and generate descriptive filenames.
 
 ## The Problem SnapSense Solves
 
