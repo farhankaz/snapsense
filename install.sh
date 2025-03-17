@@ -52,6 +52,48 @@ if ! chmod +x "$INSTALL_DIR/snapsense.py" || ! chmod +x "$INSTALL_DIR/snapsense_
     exit 1
 fi
 
+# Create a wrapper script for snapsense_cli.py that activates the virtual environment
+echo "Creating wrapper script..."
+WRAPPER_SCRIPT="$INSTALL_DIR/snapsense_wrapper.sh"
+cat > "$WRAPPER_SCRIPT" << EOF
+#!/bin/bash
+# Wrapper script to run snapsense_cli.py in the virtual environment
+
+# Define colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Hardcode the installation directory path instead of trying to derive it
+INSTALL_DIR="$HOME/.local/share/snapsense"
+VENV_DIR="\$INSTALL_DIR/venv"
+CLI_SCRIPT="\$INSTALL_DIR/snapsense_cli.py"
+
+# Check if virtual environment exists
+if [ ! -d "\$VENV_DIR" ]; then
+    echo -e "\${RED}Error: Virtual environment directory not found at \$VENV_DIR\${NC}"
+    echo "Please reinstall SnapSense."
+    exit 1
+fi
+
+# Check for Python interpreter (could be a file or symlink)
+if [ ! -e "\$VENV_DIR/bin/python" ]; then
+    echo -e "\${RED}Error: Python interpreter not found in virtual environment at \$VENV_DIR/bin/python\${NC}"
+    echo "Please reinstall SnapSense."
+    exit 1
+fi
+
+# Use a subshell to activate the virtual environment and run the CLI script
+(source "\$VENV_DIR/bin/activate" && python "\$CLI_SCRIPT" "\$@")
+EOF
+
+# Make the wrapper script executable
+if ! chmod +x "$WRAPPER_SCRIPT"; then
+    echo -e "${RED}Error: Failed to make wrapper script executable.${NC}"
+    exit 1
+fi
+
 # Create bin directory if it doesn't exist
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
@@ -102,52 +144,7 @@ else
     exit 1
 fi
 
-# Create a wrapper script for snapsense_cli.py that activates the virtual environment
-echo "Creating wrapper script..."
-WRAPPER_SCRIPT="$INSTALL_DIR/snapsense_wrapper.sh"
-cat > "$WRAPPER_SCRIPT" << EOF
-#!/bin/bash
-# Wrapper script to run snapsense_cli.py in the virtual environment
-
-# Define colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# Hardcode the installation directory path instead of trying to derive it
-INSTALL_DIR="$HOME/.local/share/snapsense"
-VENV_DIR="\$INSTALL_DIR/venv"
-CLI_SCRIPT="\$INSTALL_DIR/snapsense_cli.py"
-
-# Debug information
-echo "Installation directory: \$INSTALL_DIR"
-echo "Virtual environment path: \$VENV_DIR"
-echo "CLI script path: \$CLI_SCRIPT"
-
-# Check if virtual environment exists
-if [ ! -d "\$VENV_DIR" ]; then
-    echo -e "\${RED}Error: Virtual environment directory not found at \$VENV_DIR\${NC}"
-    echo "Please reinstall SnapSense."
-    exit 1
-fi
-
-# Check for Python interpreter (could be a file or symlink)
-if [ ! -e "\$VENV_DIR/bin/python" ]; then
-    echo -e "\${RED}Error: Python interpreter not found in virtual environment at \$VENV_DIR/bin/python\${NC}"
-    echo "Please reinstall SnapSense."
-    exit 1
-fi
-
-# Use a subshell to activate the virtual environment and run the CLI script
-(source "\$VENV_DIR/bin/activate" && python "\$CLI_SCRIPT" "\$@")
-EOF
-
-# Make the wrapper script executable
-if ! chmod +x "$WRAPPER_SCRIPT"; then
-    echo -e "${RED}Error: Failed to make wrapper script executable.${NC}"
-    exit 1
-fi
+# Wrapper script already created above
 
 # Create config directory
 CONFIG_DIR="$HOME/.config/snapsense"
