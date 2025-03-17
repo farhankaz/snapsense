@@ -27,7 +27,8 @@ SnapSense transforms this experience by intelligently analyzing your screenshots
 ## Installation
 
 1. Clone or download this repository
-2. Run the installation script:
+2. Install [uv](https://github.com/astral-sh/uv) Python package manager
+3. Run the installation script:
 
 ```bash
 chmod +x install.sh
